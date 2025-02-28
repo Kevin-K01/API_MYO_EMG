@@ -1,16 +1,53 @@
-from flask import Flask
+from flask import Flask,request,jsonify
 from flask_socketio import SocketIO
 import myo
 from collections import deque
 from threading import Lock, Thread
+import csv
+import os
+from flask_cors import CORS  # Importar CORS
 
 app = Flask(__name__)
+CORS(app)  # Habilitar CORS para todas las rutas
 socketio = SocketIO(app, cors_allowed_origins="*")  # Habilita CORS para recibir peticiones de React
 
+CSV_FILE = "datos_pacientes.csv"
+# Verificar si el archivo CSV existe, si no, crearlo con encabezados
+def initialize_csv():
+    if not os.path.exists(CSV_FILE):
+        with open(CSV_FILE, mode="w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["nombre", "sesion", "curp", "Extremidad_Afectada", "observaciones"])  # Cabeceras
+initialize_csv()
 
 @app.route('/')
 def root():
-    return "Home"
+    return "Servidor Flask-SocketIO para Myo y React"
+
+
+@app.route("/add_patient", methods=["POST"])
+def add_patient():
+    data = request.json  # Datos recibidos de React (JSON)
+    # Verificación de los datos recibidos
+    print("Datos recibidos:", data)
+
+    if not all(k in data for k in ["nombre", "sesion", "curp", "Extremidad_Afectada", "observaciones"]):
+        return {"error": "Datos incompletos"}, 400
+
+    # Verificar si la CURP ya existe en el archivo
+    with open(CSV_FILE, mode="r", newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            if row["curp"] == data["curp"]:
+                return {"error": "CURP ya registrada"}, 409
+
+    # Agregar datos al CSV
+    with open(CSV_FILE, mode="a", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [data["nombre"], data["sesion"], data["curp"], data["Extremidad_Afectada"], data["observaciones"]])
+
+    return {"message": "Paciente agregado correctamente"}, 200
 
 
 class EmgCollector(myo.DeviceListener):
@@ -22,7 +59,7 @@ class EmgCollector(myo.DeviceListener):
 
     def on_connected(self, event):
         event.device.stream_emg(True)
-        print("Dispositivo Myo conectado. Transmisión EMG habi  litada")
+        print("Dispositivo Myo conectado. Transmisión EMG habilitada")
 
     def on_emg(self, event):
         with self.lock:
