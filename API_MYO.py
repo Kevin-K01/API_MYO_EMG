@@ -60,6 +60,19 @@ def add_patient():
 
     return {"message": "Paciente agregado correctamente"}, 200
 
+
+
+
+#controlar robot
+@app.route("/start_robot", methods=["POST"])
+
+
+
+
+
+@app.route("/stop_robot", methods=["POST"])
+
+
 class EmgCollector(myo.DeviceListener):
     def __init__(self, n):
         self.n = n
@@ -72,10 +85,20 @@ class EmgCollector(myo.DeviceListener):
         self.current_patient_file = None
         self.session_number = None  # Para almacenar el número de sesión
         self.observations = None  # Para almacenar las observaciones
-
+        self.acelerometro =deque(maxlen=n)
+        self.giroscopio = deque(maxlen=n)
     def on_connected(self, event):
         event.device.stream_emg(True)
         print("Dispositivo Myo conectado. Transmisión EMG habilitada")
+
+    def on_orientation(self, event):
+        """ Captura los datos de orientación: acelerómetro y giroscopio """
+        acelerometro = event.acceleration
+        giroscopio = event.gyroscope
+
+        # Almacenar en las colas correspondientes
+        self.acelerometro.append((event.timestamp, acelerometro))
+        self.giroscopio.append((event.timestamp, giroscopio))
 
     def on_emg(self, event):
         with self.lock:
@@ -86,7 +109,7 @@ class EmgCollector(myo.DeviceListener):
             # Si estamos grabando, guardamos los datos directamente en el archivo CSV
             if self.is_recording and self.current_patient_file:
                 # Guardar los datos EMG en el archivo correspondiente
-                self.save_data(event.timestamp, filtered_emg)
+                self.save_data(event.timestamp, filtered_emg,self.acelerometro,self.giroscopio)
 
                 if not self.session_saved:
                     self.save_session()
@@ -109,7 +132,7 @@ class EmgCollector(myo.DeviceListener):
                 writer.writerow([self.session_number, self.observations])
 
 
-    def save_data(self, timestamp, filtered_emg):
+    def save_data(self, timestamp, filtered_emg,acelerometro,giroscopio):
         if self.current_patient_file:
             # Extraer el nombre del paciente de la ruta del archivo
             patient_name = os.path.splitext(os.path.basename(self.current_patient_file))[0]
@@ -119,7 +142,18 @@ class EmgCollector(myo.DeviceListener):
 
             # Archivos separados por paciente
             self.session_file = os.path.join(patient_directory, f"sesiones.csv")
-            emg_file = os.path.join(patient_directory, f"{self.session_number}_emg.csv")
+            emg_file = os.path.join(patient_directory, f"Sesion_{self.session_number}_emg.csv")
+            orientacion_file = os.path.join(patient_directory,f"Sesion_{self.session_number}_orientation.csv")
+
+            #Guardar datos de aceleración y giroscopio
+            if not os.path.exists(orientacion_file):
+                with open(orientacion_file, mode="a", newline="", encoding="utf-8") as file:
+                    writer = csv.writer(file)
+
+                    #Escribir encabezados del archivo de aceleracion y giroscopio
+                    writer.writerow(["timestamp", "acceleration_x", "acceleration_y", "acceleration_z",
+                                     "gyroscope_x", "gyroscope_y","gyroscope_z"])
+                    print("Escribiendo encabezados de datos de aceleracion y giroscopio...")
 
             # Guardar datos EMG
             if not os.path.exists(emg_file):
@@ -133,11 +167,22 @@ class EmgCollector(myo.DeviceListener):
                     ])
                     print("Escribiendo encabezados de datos EMG...")
 
+            # Obtener el último dato de acelerómetro y giroscopio
+            acelerometro_data = list(acelerometro[-1][1]) if acelerometro else [0, 0, 0]
+            giroscopio_data = list(giroscopio[-1][1]) if giroscopio else [0, 0, 0]
+
+            #Guardar los datos de aceleración y giroscopio
+            with open(orientacion_file, mode="a", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                writer.writerow([timestamp] + acelerometro_data + giroscopio_data)
+                print(f"Guardando datos de orientación: {acelerometro_data,giroscopio_data}")
+
             # Guardar los datos EMG (sensores 1-8) cada vez que se capture
             with open(emg_file, mode="a", newline="", encoding="utf-8") as file:
                 writer = csv.writer(file)
                 writer.writerow([timestamp] + filtered_emg)  # Guardar timestamp + datos EMG
                 print(f"Guardando fila de datos EMG: {[timestamp] + filtered_emg}")
+
 
     def stop_recording(self):
         """ Detiene la grabación y guarda los datos restantes """
